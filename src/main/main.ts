@@ -21,6 +21,7 @@ import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
 import { OpenClawConfigSync } from './libs/openclawConfigSync';
+import { OpenClawChannelSessionSync } from './libs/openclawChannelSessionSync';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
 import { APP_NAME } from './appConstants';
 import { getSkillServiceManager } from './skillServices';
@@ -663,6 +664,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
     openClawConfigSync = new OpenClawConfigSync({
       engineManager: getOpenClawEngineManager(),
       getCoworkConfig: () => getCoworkStore().getConfig(),
+      getTelegramOpenClawConfig: () => {
+        try {
+          return getIMGatewayManager()?.getConfig()?.telegramOpenClaw ?? null;
+        } catch {
+          return null;
+        }
+      },
     });
   }
   return openClawConfigSync;
@@ -802,6 +810,21 @@ const getCoworkEngineRouter = () => {
     }
     if (!openClawRuntimeAdapter) {
       openClawRuntimeAdapter = new OpenClawRuntimeAdapter(getCoworkStore(), getOpenClawEngineManager());
+      // Wire up channel session sync for IM conversations via OpenClaw
+      try {
+        const imManager = getIMGatewayManager();
+        const imStore = imManager.getIMStore();
+        if (imStore) {
+          const channelSessionSync = new OpenClawChannelSessionSync({
+            coworkStore: getCoworkStore(),
+            imStore,
+            getDefaultCwd: () => getCoworkStore().getConfig().workingDirectory || os.homedir(),
+          });
+          openClawRuntimeAdapter.setChannelSessionSync(channelSessionSync);
+        }
+      } catch (error) {
+        console.warn('[Main] Failed to set up channel session sync:', error);
+      }
     }
     coworkEngineRouter = new CoworkEngineRouter({
       getCurrentEngine: resolveCoworkAgentEngine,
@@ -849,6 +872,13 @@ const getIMGatewayManager = () => {
           if (status.phase !== 'running') {
             throw new Error(status.message || 'AI engine is initializing. Please try again in a moment.');
           }
+        },
+        isOpenClawEngine: () => resolveCoworkAgentEngine() === 'openclaw',
+        syncOpenClawConfig: async () => {
+          await syncOpenClawConfig({
+            reason: 'im-gateway-telegram-openclaw',
+            restartGatewayIfRunning: true,
+          });
         },
       }
     );
@@ -2186,6 +2216,18 @@ if (!gotTheLock) {
   ipcMain.handle('im:config:set', async (_event, config: Partial<IMGatewayConfig>) => {
     try {
       getIMGatewayManager().setConfig(config);
+
+      // Sync Telegram OpenClaw config to OpenClaw runtime if changed
+      if (config.telegramOpenClaw) {
+        const engineManager = getOpenClawEngineManager();
+        if (engineManager.getStatus().phase === 'running') {
+          await syncOpenClawConfig({
+            reason: 'telegram-openclaw-config-change',
+            restartGatewayIfRunning: true,
+          });
+        }
+      }
+
       return { success: true };
     } catch (error) {
       return {

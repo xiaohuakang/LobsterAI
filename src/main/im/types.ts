@@ -104,6 +104,33 @@ export interface TelegramGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== Telegram OpenClaw Types ====================
+
+export interface TelegramOpenClawGroupConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+export interface TelegramOpenClawConfig {
+  enabled: boolean;
+  botToken: string;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  groups: Record<string, TelegramOpenClawGroupConfig>;
+  historyLimit: number;
+  replyToMode: 'off' | 'first' | 'all';
+  linkPreview: boolean;
+  streaming: 'off' | 'partial' | 'block' | 'progress';
+  mediaMaxMb: number;
+  proxy: string;
+  webhookUrl: string;
+  webhookSecret: string;
+  debug: boolean;
+}
+
 // ==================== Discord Types ====================
 
 export interface DiscordConfig {
@@ -172,6 +199,7 @@ export interface IMGatewayConfig {
   nim: NimConfig;
   xiaomifeng: XiaomifengConfig;
   settings: IMSettings;
+  telegramOpenClaw?: TelegramOpenClawConfig;
 }
 
 export interface IMSettings {
@@ -273,7 +301,8 @@ export type IMConnectivityCheckCode =
   | 'discord_group_requires_mention'
   | 'telegram_privacy_mode_hint'
   | 'dingtalk_bot_membership_hint'
-  | 'nim_p2p_only_hint';
+  | 'nim_p2p_only_hint'
+  | 'openclaw_gateway_not_running';
 
 export interface IMConnectivityCheck {
   code: IMConnectivityCheckCode;
@@ -340,6 +369,25 @@ export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
   enabled: false,
   clientId: '',
   secret: '',
+  debug: true,
+};
+
+export const DEFAULT_TELEGRAM_OPENCLAW_CONFIG: TelegramOpenClawConfig = {
+  enabled: false,
+  botToken: '',
+  dmPolicy: 'pairing',
+  allowFrom: [],
+  groupPolicy: 'allowlist',
+  groupAllowFrom: [],
+  groups: { '*': { requireMention: true } },
+  historyLimit: 50,
+  replyToMode: 'off',
+  linkPreview: true,
+  streaming: 'off',
+  mediaMaxMb: 5,
+  proxy: '',
+  webhookUrl: '',
+  webhookSecret: '',
   debug: true,
 };
 

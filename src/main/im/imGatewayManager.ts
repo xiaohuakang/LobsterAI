@@ -50,6 +50,8 @@ export interface IMGatewayManagerOptions {
   coworkRuntime?: CoworkRuntime;
   coworkStore?: CoworkStore;
   ensureCoworkReady?: () => Promise<void>;
+  isOpenClawEngine?: () => boolean;
+  syncOpenClawConfig?: () => Promise<void>;
 }
 
 export class IMGatewayManager extends EventEmitter {
@@ -65,6 +67,8 @@ export class IMGatewayManager extends EventEmitter {
   private getLLMConfig: (() => Promise<any>) | null = null;
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
+  private isOpenClawEngine: (() => boolean) | null = null;
+  private syncOpenClawConfig: (() => Promise<void>) | null = null;
 
   // Cowork dependencies
   private coworkRuntime: CoworkRuntime | null = null;
@@ -90,6 +94,8 @@ export class IMGatewayManager extends EventEmitter {
       this.coworkStore = options.coworkStore;
     }
     this.ensureCoworkReady = options?.ensureCoworkReady ?? null;
+    this.isOpenClawEngine = options?.isOpenClawEngine ?? null;
+    this.syncOpenClawConfig = options?.syncOpenClawConfig ?? null;
 
     // Forward gateway events
     this.setupGatewayEventForwarding();
@@ -407,6 +413,13 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   /**
+   * Get the underlying IMStore instance (for session mapping operations)
+   */
+  getIMStore(): IMStore {
+    return this.imStore;
+  }
+
+  /**
    * Update configuration
    */
   setConfig(config: Partial<IMGatewayConfig>): void {
@@ -548,6 +561,11 @@ export class IMGatewayManager extends EventEmitter {
     platform: IMPlatform,
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {
+    // Telegram in OpenClaw mode: test using OpenClaw-specific config
+    if (platform === 'telegram' && this.isOpenClawEngine?.()) {
+      return this.testTelegramOpenClawConnectivity(configOverride);
+    }
+
     const config = this.buildMergedConfig(configOverride);
     const checks: IMConnectivityCheck[] = [];
     const testedAt = Date.now();
@@ -753,6 +771,12 @@ export class IMGatewayManager extends EventEmitter {
     } else if (platform === 'feishu') {
       await this.feishuGateway.start(config.feishu);
     } else if (platform === 'telegram') {
+      // In OpenClaw mode, Telegram runs inside OpenClaw gateway — do not start the direct gateway
+      if (this.isOpenClawEngine?.()) {
+        console.log('[IMGatewayManager] Telegram in OpenClaw mode, syncing config instead of starting direct gateway');
+        await this.syncOpenClawConfig?.();
+        return;
+      }
       await this.telegramGateway.start(config.telegram);
     } else if (platform === 'discord') {
       await this.discordGateway.start(config.discord);
@@ -775,6 +799,11 @@ export class IMGatewayManager extends EventEmitter {
     } else if (platform === 'feishu') {
       await this.feishuGateway.stop();
     } else if (platform === 'telegram') {
+      if (this.isOpenClawEngine?.()) {
+        console.log('[IMGatewayManager] Telegram in OpenClaw mode, syncing disabled config');
+        await this.syncOpenClawConfig?.();
+        return;
+      }
       await this.telegramGateway.stop();
     } else if (platform === 'discord') {
       await this.discordGateway.stop();
@@ -808,10 +837,13 @@ export class IMGatewayManager extends EventEmitter {
     }
 
     if (config.telegram.enabled && config.telegram.botToken) {
-      try {
-        await this.startGateway('telegram');
-      } catch (error: any) {
-        console.error(`[IMGatewayManager] Failed to start Telegram: ${error.message}`);
+      // Skip direct Telegram gateway when OpenClaw handles Telegram
+      if (!this.isOpenClawEngine?.()) {
+        try {
+          await this.startGateway('telegram');
+        } catch (error: any) {
+          console.error(`[IMGatewayManager] Failed to start Telegram: ${error.message}`);
+        }
       }
     }
 
@@ -938,6 +970,85 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
+  /**
+   * Test Telegram connectivity when running via OpenClaw runtime.
+   * Validates bot token via Telegram API (same auth probe as direct mode).
+   */
+  private async testTelegramOpenClawConnectivity(
+    configOverride?: Partial<IMGatewayConfig>
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: IMPlatform = 'telegram';
+
+    // Resolve the OpenClaw Telegram config
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const tgConfig = mergedConfig.telegramOpenClaw;
+    const botToken = tgConfig?.botToken || '';
+
+    // Check 1: Bot token present
+    if (!botToken) {
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: '缺少必要配置项: botToken',
+        suggestion: '请补全 Bot Token 后重新测试连通性。',
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    // Check 2: Auth probe via Telegram API (getMe)
+    try {
+      const response = await this.withTimeout(
+        fetchJsonWithTimeout<TelegramGetMeResponse>(
+          `https://api.telegram.org/bot${botToken}/getMe`,
+          {},
+          CONNECTIVITY_TIMEOUT_MS
+        ),
+        CONNECTIVITY_TIMEOUT_MS,
+        '鉴权探测超时'
+      );
+      if (response?.ok && response.result?.username) {
+        checks.push({
+          code: 'auth_check',
+          level: 'pass',
+          message: `Telegram Bot 鉴权通过: @${response.result.username}`,
+        });
+      } else {
+        checks.push({
+          code: 'auth_check',
+          level: 'fail',
+          message: `Telegram Bot 鉴权失败: ${response?.description || '未知错误'}`,
+          suggestion: '请检查 Bot Token 是否正确。',
+        });
+        return { platform, testedAt, verdict: 'fail', checks };
+      }
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: `Telegram Bot 鉴权失败: ${error.message}`,
+        suggestion: '请检查 Bot Token 是否正确，且网络通畅。',
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    // Check 3: OpenClaw Gateway running
+    checks.push({
+      code: 'gateway_running',
+      level: 'info',
+      message: 'Telegram 通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    });
+
+    const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
+      ? 'fail'
+      : checks.some(c => c.level === 'warn')
+        ? 'warn'
+        : 'pass';
+
+    return { platform, testedAt, verdict, checks };
+  }
+
   private buildMergedConfig(configOverride?: Partial<IMGatewayConfig>): IMGatewayConfig {
     const current = this.getConfig();
     if (!configOverride) {
@@ -953,6 +1064,9 @@ export class IMGatewayManager extends EventEmitter {
       nim: { ...current.nim, ...(configOverride.nim || {}) },
       xiaomifeng: { ...current.xiaomifeng, ...(configOverride.xiaomifeng || {}) },
       settings: { ...current.settings, ...(configOverride.settings || {}) },
+      telegramOpenClaw: configOverride.telegramOpenClaw
+        ? { ...(current.telegramOpenClaw || {}), ...configOverride.telegramOpenClaw } as any
+        : current.telegramOpenClaw,
     };
   }
 

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
+import type { TelegramOpenClawConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 
@@ -35,15 +36,18 @@ export type OpenClawConfigSyncResult = {
 type OpenClawConfigSyncDeps = {
   engineManager: OpenClawEngineManager;
   getCoworkConfig: () => CoworkConfig;
+  getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
 };
 
 export class OpenClawConfigSync {
   private readonly engineManager: OpenClawEngineManager;
   private readonly getCoworkConfig: () => CoworkConfig;
+  private readonly getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
 
   constructor(deps: OpenClawConfigSyncDeps) {
     this.engineManager = deps.engineManager;
     this.getCoworkConfig = deps.getCoworkConfig;
+    this.getTelegramOpenClawConfig = deps.getTelegramOpenClawConfig;
   }
 
   sync(reason: string): OpenClawConfigSyncResult {
@@ -112,6 +116,39 @@ export class OpenClawConfigSync {
         },
       },
     };
+
+    // Sync Telegram OpenClaw channel config
+    const tgConfig = this.getTelegramOpenClawConfig?.();
+    if (tgConfig?.enabled && tgConfig.botToken) {
+      const telegramChannel: Record<string, unknown> = {
+        enabled: true,
+        botToken: tgConfig.botToken,
+        dmPolicy: tgConfig.dmPolicy || 'pairing',
+        allowFrom: tgConfig.allowFrom?.length ? tgConfig.allowFrom : [],
+        groupPolicy: tgConfig.groupPolicy || 'allowlist',
+        groupAllowFrom: tgConfig.groupAllowFrom?.length ? tgConfig.groupAllowFrom : [],
+        groups: tgConfig.groups && Object.keys(tgConfig.groups).length > 0
+          ? tgConfig.groups
+          : { '*': { requireMention: true } },
+        historyLimit: tgConfig.historyLimit || 50,
+        replyToMode: tgConfig.replyToMode || 'off',
+        linkPreview: tgConfig.linkPreview ?? true,
+        streaming: tgConfig.streaming || 'off',
+        mediaMaxMb: tgConfig.mediaMaxMb || 5,
+      };
+      if (tgConfig.proxy) {
+        telegramChannel.proxy = tgConfig.proxy;
+      }
+      if (tgConfig.webhookUrl) {
+        telegramChannel.webhookUrl = tgConfig.webhookUrl;
+        if (tgConfig.webhookSecret) {
+          telegramChannel.webhookSecret = tgConfig.webhookSecret;
+        }
+      }
+      managedConfig.channels = { telegram: telegramChannel };
+    } else if (tgConfig) {
+      managedConfig.channels = { telegram: { enabled: false } };
+    }
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
     let currentContent = '';

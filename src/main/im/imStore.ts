@@ -9,6 +9,7 @@ import {
   DingTalkConfig,
   FeishuConfig,
   TelegramConfig,
+  TelegramOpenClawConfig,
   DiscordConfig,
   NimConfig,
   XiaomifengConfig,
@@ -18,6 +19,7 @@ import {
   DEFAULT_DINGTALK_CONFIG,
   DEFAULT_FEISHU_CONFIG,
   DEFAULT_TELEGRAM_CONFIG,
+  DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
   DEFAULT_DISCORD_CONFIG,
   DEFAULT_NIM_CONFIG,
   DEFAULT_XIAOMIFENG_CONFIG,
@@ -186,6 +188,7 @@ export class IMStore {
       nim: resolveEnabled(nim, DEFAULT_NIM_CONFIG),
       xiaomifeng: resolveEnabled(xiaomifeng, DEFAULT_XIAOMIFENG_CONFIG),
       settings: { ...DEFAULT_IM_SETTINGS, ...settings },
+      telegramOpenClaw: this.getTelegramOpenClawConfig(),
     };
   }
 
@@ -210,6 +213,9 @@ export class IMStore {
     }
     if (config.settings) {
       this.setIMSettings(config.settings);
+    }
+    if (config.telegramOpenClaw) {
+      this.setTelegramOpenClawConfig(config.telegramOpenClaw);
     }
   }
 
@@ -283,6 +289,18 @@ export class IMStore {
   setXiaomifengConfig(config: Partial<XiaomifengConfig>): void {
     const current = this.getXiaomifengConfig();
     this.setConfigValue('xiaomifeng', { ...current, ...config });
+  }
+
+  // ==================== Telegram OpenClaw Config ====================
+
+  getTelegramOpenClawConfig(): TelegramOpenClawConfig {
+    const stored = this.getConfigValue<TelegramOpenClawConfig>('telegramOpenClaw');
+    return { ...DEFAULT_TELEGRAM_OPENCLAW_CONFIG, ...stored };
+  }
+
+  setTelegramOpenClawConfig(config: Partial<TelegramOpenClawConfig>): void {
+    const current = this.getTelegramOpenClawConfig();
+    this.setConfigValue('telegramOpenClaw', { ...current, ...config });
   }
 
   // ==================== IM Settings ====================

@@ -10,6 +10,7 @@ import type {
   DingTalkConfig,
   FeishuConfig,
   TelegramConfig,
+  TelegramOpenClawConfig,
   DiscordConfig,
   NimConfig,
   XiaomifengConfig,
@@ -18,6 +19,7 @@ import type {
 import {
   DEFAULT_IM_CONFIG,
   DEFAULT_IM_STATUS,
+  DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
 } from '../../types/im';
 
 export interface IMState {
@@ -59,6 +61,12 @@ const imSlice = createSlice({
     setXiaomifengConfig: (state, action: PayloadAction<Partial<XiaomifengConfig>>) => {
       state.config.xiaomifeng = { ...state.config.xiaomifeng, ...action.payload };
     },
+    setTelegramOpenClawConfig: (state, action: PayloadAction<Partial<TelegramOpenClawConfig>>) => {
+      state.config.telegramOpenClaw = {
+        ...(state.config.telegramOpenClaw || DEFAULT_TELEGRAM_OPENCLAW_CONFIG),
+        ...action.payload,
+      };
+    },
     setIMSettings: (state, action: PayloadAction<Partial<IMSettings>>) => {
       state.config.settings = { ...state.config.settings, ...action.payload };
     },
@@ -82,6 +90,7 @@ export const {
   setDingTalkConfig,
   setFeishuConfig,
   setTelegramConfig,
+  setTelegramOpenClawConfig,
   setDiscordConfig,
   setNimConfig,
   setXiaomifengConfig,
