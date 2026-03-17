@@ -1902,21 +1902,6 @@ if (!gotTheLock) {
         metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
       });
 
-      const probe = await probeCoworkModelReadiness();
-      if (probe.ok === false) {
-        coworkStoreInstance.updateSession(session.id, { status: 'error' });
-        coworkStoreInstance.addMessage(session.id, {
-          type: 'system',
-          content: `Error: ${probe.error}`,
-          metadata: { error: probe.error },
-        });
-        const failedSession = coworkStoreInstance.getSession(session.id) || {
-          ...session,
-          status: 'error' as const,
-        };
-        return { success: true, session: failedSession };
-      }
-
       const runner = getCoworkRunner();
 
       // Update session status to 'running' before starting async task

@@ -2795,22 +2795,91 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       historyEntries.length,
     );
 
-    // Append messages from firstNewIdx onwards.
+    // Sync user messages from gateway history.
     // Only sync user messages here — assistant messages are already added by the
     // real-time streaming pipeline (handleChatDelta / handleAgentEvent) and by
     // syncFinalAssistantWithHistory's own addMessage/updateMessage logic.
+    //
+    // When syncing a user message, check whether the corresponding assistant response
+    // was already created locally (e.g. due to prefetch timeout where the assistant
+    // streamed before user messages were synced). If so, use insertMessageBeforeId
+    // to place the user message before the assistant — preserving correct chronological
+    // order. This handles the race condition where gateway chat.history lags behind
+    // the real-time streaming events.
     let syncedCount = 0;
+
+    // Collect all user message indices that need syncing:
+    // 1. Normal: user messages from firstNewIdx onwards
+    // 2. Repair: user messages before firstNewIdx that are missing locally
+    //    (can happen when computeChannelHistoryFirstNewIndex's forward-match
+    //    strategy matches the assistant but skips the preceding user message)
+    const currentSession = this.store.getSession(sessionId);
+    const localUserTexts = new Set<string>();
+    if (currentSession) {
+      for (const msg of currentSession.messages) {
+        if (msg.type === 'user') {
+          localUserTexts.add(msg.content.trim());
+        }
+      }
+    }
+
+    const userIndicesToSync: number[] = [];
+    // Normal range: from firstNewIdx onwards
     for (let i = firstNewIdx; i < historyEntries.length; i++) {
-      const entry = historyEntries[i];
-      if (entry.role !== 'user') continue;
-      const userMessage = this.store.addMessage(sessionId, {
-        type: 'user',
-        content: entry.text,
-        metadata: {},
-      });
+      if (historyEntries[i].role === 'user') {
+        userIndicesToSync.push(i);
+      }
+    }
+    // Repair range: before firstNewIdx, missing locally
+    for (let i = 0; i < firstNewIdx; i++) {
+      if (historyEntries[i].role === 'user' && !localUserTexts.has(historyEntries[i].text)) {
+        userIndicesToSync.push(i);
+      }
+    }
+
+    for (const idx of userIndicesToSync) {
+      const entry = historyEntries[idx];
+
+      // Find the next assistant entry in history after this user entry, then
+      // look for a matching local assistant message. If found, insert the user
+      // message before it to maintain correct chronological order.
+      let insertBeforeId: string | null = null;
+      if (currentSession) {
+        for (let j = idx + 1; j < historyEntries.length; j++) {
+          if (historyEntries[j].role !== 'assistant') continue;
+          const assistantText = historyEntries[j].text;
+          // Match by content prefix — local text may be segmented or truncated
+          const matchPrefix = assistantText.slice(0, 100);
+          const localMatch = currentSession.messages.find(
+            (m: CoworkMessage) => m.type === 'assistant' && m.content.trim().startsWith(matchPrefix),
+          );
+          if (localMatch) {
+            insertBeforeId = localMatch.id;
+          }
+          break;
+        }
+      }
+
+      let userMessage;
+      if (insertBeforeId) {
+        userMessage = this.store.insertMessageBeforeId(sessionId, insertBeforeId, {
+          type: 'user',
+          content: entry.text,
+          metadata: {},
+        });
+        console.log('[Debug:syncChannelUserMessages] inserted user message before assistant, sessionId:', sessionId, 'idx:', idx, 'firstNewIdx:', firstNewIdx);
+      } else {
+        userMessage = this.store.addMessage(sessionId, {
+          type: 'user',
+          content: entry.text,
+          metadata: {},
+        });
+      }
       this.emit('message', sessionId, userMessage);
+      localUserTexts.add(entry.text);
       syncedCount++;
     }
+
     this.channelSyncCursor.set(sessionId, historyEntries.length);
     console.log('[Debug:syncChannelUserMessages] synced', syncedCount, 'new messages (firstNewIdx:', firstNewIdx, ', newCursor:', historyEntries.length, ')');
   }
@@ -3080,7 +3149,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       });
     }
     this.activeTurns.delete(sessionId);
-    this.lastSystemPromptBySession.delete(sessionId);
+    // NOTE: Do NOT clear lastSystemPromptBySession here — it must persist
+    // across turns so that the system prompt is only injected on the first
+    // turn of a session (or when it actually changes).  Cleanup happens in
+    // onSessionDeleted() when the session is removed entirely.
     this.reCreatedChannelSessionIds.delete(sessionId);
   }
 
