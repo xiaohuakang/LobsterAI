@@ -19,6 +19,7 @@ import { setSkills } from '../../store/slices/skillSlice';
 import { RootState } from '../../store';
 import { Skill, MarketplaceSkill, MarketTag } from '../../types/skill';
 import ErrorMessage from '../ErrorMessage';
+import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
 
@@ -42,6 +43,9 @@ const SkillsManager: React.FC = () => {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
+  const [securityReport, setSecurityReport] = useState<any>(null);
+  const [pendingInstallId, setPendingInstallId] = useState<string | null>(null);
+  const [isConfirmingInstall, setIsConfirmingInstall] = useState(false);
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -219,8 +223,22 @@ const SkillsManager: React.FC = () => {
     setSkillActionError('');
     const result = await skillService.downloadSkill(trimmedSource);
     setIsDownloadingSkill(false);
+    console.log('[SkillsManager] downloadSkill result:', JSON.stringify({
+      success: result.success,
+      error: result.error,
+      hasAuditReport: !!result.auditReport,
+      pendingInstallId: result.pendingInstallId,
+      riskLevel: result.auditReport?.riskLevel,
+      findingsCount: result.auditReport?.findings?.length,
+    }));
     if (!result.success) {
       setSkillActionError(result.error || i18nService.t('skillDownloadFailed'));
+      return;
+    }
+    // Security audit returned — show report modal
+    if (result.auditReport && result.pendingInstallId) {
+      setSecurityReport(result.auditReport);
+      setPendingInstallId(result.pendingInstallId);
       return;
     }
     if (result.skills) {
@@ -275,6 +293,12 @@ const SkillsManager: React.FC = () => {
         setSkillActionError(result.error || i18nService.t('skillInstallFailed'));
         return;
       }
+      // Security audit returned — show report modal
+      if (result.auditReport && result.pendingInstallId) {
+        setSecurityReport(result.auditReport);
+        setPendingInstallId(result.pendingInstallId);
+        return;
+      }
       if (result.skills) {
         dispatch(setSkills(result.skills));
       }
@@ -282,6 +306,30 @@ const SkillsManager: React.FC = () => {
       setSkillActionError(i18nService.t('skillInstallFailed'));
     } finally {
       setInstallingSkillId(null);
+    }
+  };
+
+  const handleSecurityReportAction = async (action: 'install' | 'installDisabled' | 'cancel') => {
+    if (!pendingInstallId) return;
+    setIsConfirmingInstall(true);
+    try {
+      const result = await skillService.confirmInstall(pendingInstallId, action);
+      if (result.success && result.skills) {
+        dispatch(setSkills(result.skills));
+      }
+      if (!result.success && result.error) {
+        setSkillActionError(result.error);
+      }
+    } catch {
+      setSkillActionError(i18nService.t('skillInstallFailed'));
+    } finally {
+      setSecurityReport(null);
+      setPendingInstallId(null);
+      setIsConfirmingInstall(false);
+      setInstallingSkillId(null);
+      setSkillDownloadSource('');
+      setIsAddSkillMenuOpen(false);
+      setIsGithubImportOpen(false);
     }
   };
 
@@ -881,6 +929,14 @@ const SkillsManager: React.FC = () => {
           </div>
         </div>
       , document.body)}
+
+      {securityReport && (
+        <SkillSecurityReport
+          report={securityReport}
+          onAction={handleSecurityReportAction}
+          isLoading={isConfirmingInstall}
+        />
+      )}
     </div>
   );
 };
